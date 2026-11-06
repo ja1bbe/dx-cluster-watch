@@ -1,0 +1,66 @@
+name: dx-cluster-watch
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # 10分ごと（GitHubの混雑で遅れたり飛んだりすることがある）
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "件名に【試験】を付ける"
+        type: boolean
+        default: true
+      pretend_unworked:
+        description: "試験用：未交信扱いにする主プレフィックス（例: 3B8,VP8/h）"
+        type: string
+        default: ""
+
+concurrency:
+  group: dx-cluster-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    # PCが監視している間（WATCH_MODE=pc）は何もしない
+    if: ${{ vars.WATCH_MODE != 'pc' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 状態リポジトリ（非公開）を取得
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/dx-cluster-watch-state
+          token: ${{ secrets.STATE_TOKEN }}
+          path: state
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: 監視（公開ログには件数だけを出す）
+        env:
+          WORKED_ENTITIES: ${{ secrets.WORKED_ENTITIES }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          WATCH_TEST: ${{ inputs.test }}
+          PRETEND_UNWORKED: ${{ inputs.pretend_unworked }}
+        run: >
+          python watch/cluster_watch.py --quiet-log
+          --state state/notified.json --log state/log.csv --cty state/cty.dat
+
+      - name: 状態を保存
+        if: always()
+        working-directory: state
+        run: |
+          git config user.name "dx-cluster-watch"
+          git config user.email "dx-cluster-watch@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || (git commit -q -m "state $(date -u +%FT%TZ)" && git push -q)
