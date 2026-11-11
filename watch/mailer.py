@@ -31,9 +31,10 @@ LABEL_COLORS = {
     "IC-7851": "#2a8fd6",
     "SDR": "#4fa3e0",
     "DXSCAPE": "#c0392b",
+    "DXSummit": "#e67e22",
     "DX Summit": "#e67e22",
 }
-CLUSTER_SOURCES = ("DXSCAPE", "DX Summit")
+CLUSTER_SOURCES = ("DXSCAPE", "DXSummit", "DX Summit")
 
 
 def label_color(source: str) -> str:
@@ -137,11 +138,10 @@ def make_charts(sw: dict) -> list[tuple[str, bytes]]:
 
 # ---------------------------------------------------------------- メール本文
 def subject(n: dict, test: bool = False) -> str:
-    s = f"[{n['source']}] 全バンドNEW {n['dx']} {n['band']} FT8"
-    if n.get("spotter"):
-        s += f" spotter: {n['spotter']}"
-    elif n.get("snr") is not None:
-        s += f" {n['snr']:+d}dB"
+    # dxscape_watch.py と同じ形: [起源] 印 バンド コール (エンティティ)
+    # 印は dxcc_notify.SUBJECT_MARK['ATNO'] と同じものを、リポジトリ変数 ATNO_MARK に入れておく
+    mark = os.environ.get("ATNO_MARK") or "全バンド初"
+    s = f"[{n['source']}] {mark} {n['band']} {n['dx']} ({n['entity'].name})"
     return ("【試験】" if test else "") + s
 
 
@@ -165,14 +165,14 @@ def build_html(n: dict, sw: dict, cids: dict[str, str]) -> str:
     sp_now = f"{sw['speed'][-1][1]:.0f} km/s" if sw.get("speed") else "取得できず"
 
     rows = [
+        ("コール", n["dx"]),
         ("エンティティ", f"{ent.name}（{ent.prefix}、{ent.cont}）"),
-        ("周波数", f"{n['khz']:.1f} kHz（{n['band']} FT8）"),
-        ("時刻", f"{t:%Y-%m-%d %H:%M} UTC ／ {t.astimezone(JST):%H:%M} JST"),
+        ("周波数", f"{n['khz']:.1f} kHz（{n['band']}, FT8）"),
+        ("スポット時刻", f"{t:%H:%M} UTC（{t.astimezone(JST):%H:%M} JST）"),
+        ("コメント", n.get("comment") or "-"),
+        ("スポッター", n.get("spotter") or "-"),
+        ("通知したPC", "GitHub（IC-7850停止中の代行）"),
     ]
-    if n.get("spotter"):
-        rows.append(("スポッター", n["spotter"]))
-    if n.get("comment"):
-        rows.append(("コメント", n["comment"]))
     hist = _history_text(n)
     if hist:
         rows.append(("捉えた起源", hist))
@@ -191,8 +191,9 @@ def build_html(n: dict, sw: dict, cids: dict[str, str]) -> str:
     return f"""<html><body style="font-family:sans-serif">
 <div><span style="background:{color};color:#fff;padding:3px 10px;border-radius:4px;font-weight:bold">{e(n['source'])}</span>
 <span style="color:#666;margin-left:8px">{e(kind)}</span></div>
-<h2 style="margin:10px 0 6px">全バンドNEW　{e(n['dx'])}</h2>
+<h2 style="margin:10px 0 6px">全バンド初　{e(n['band'])} {e(n['dx'])}</h2>
 <table style="border-collapse:collapse;font-size:14px">{table}</table>
+<p style="font-size:small;color:#666">国内局のスポットです。誤ったコールサインの場合があります。</p>
 {imgs}{err}
 </body></html>"""
 
