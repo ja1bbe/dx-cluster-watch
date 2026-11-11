@@ -10,7 +10,7 @@ on:
         type: boolean
         default: true
       pretend_unworked:
-        description: "試験用：未交信扱いにする主プレフィックス（例: 3B8,VP8/h）"
+        description: "試験用：未交信扱いにするエンティティ名（カンマ区切り。例: China,Asiatic Russia）"
         type: string
         default: ""
 
@@ -50,6 +50,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
+          ATNO_MARK: ${{ vars.ATNO_MARK }}
           WATCH_TEST: ${{ inputs.test }}
           PRETEND_UNWORKED: ${{ inputs.pretend_unworked }}
         run: >
