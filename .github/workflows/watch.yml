@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       test:
-        description: "件名に【試験】を付ける"
+        description: "件名に【試験】を付ける（cron-job.orgからの起動はオフのまま）"
         type: boolean
-        default: true
+        default: false
       pretend_unworked:
         description: "試験用：未交信扱いにするエンティティ名（カンマ区切り。例: China,Asiatic Russia）"
         type: string
