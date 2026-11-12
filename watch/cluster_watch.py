@@ -3,11 +3,14 @@
 
 GitHub Actions（10分ごと、1回実行）と、PC（--loop で常駐）の両方で同じスクリプトを使う。
 
-決めごと（2026年11月）
+PCでは dxscape_watch.py（DXCC水先案内人）が同じ役目を受け持つ。
+このスクリプトは、IC-7850のPCが止まっている間だけGitHubで代わりに動く。
+判定はできるだけ dxscape_watch.py に合わせている。
   - 対象はJA局（cty.datで Japan と判定されるスポッター）のスポットのみ
-  - モードはFT8のみ（周波数とコメントで判定）
-  - スポット時刻が15分以内のものだけを対象
-  - 同じコール＋バンドは30分以内に2回通知しない（クラスター同士の重複）
+  - モードはFT8のみ（標準周波数 +0〜+3kHz、またはコメントにFT8。FT4は除く）
+  - スポット時刻が60分以内のものだけを対象
+  - 同じコール＋バンドは6時間以内に再通知しない
+  - 交信済みの照合はエンティティ名（PC側の load_worked_entities と同じキー）
   - 誤スポットは除外しない
 
 公開リポジトリで動かすときは実行ログが誰でも見られるので、
@@ -35,7 +38,9 @@ UTC = dt.timezone.utc
 UA = os.environ.get("WATCH_USER_AGENT", "dx-cluster-watch (amateur radio, non-commercial)")
 DXSUMMIT_URL = os.environ.get("DXSUMMIT_URL", "https://www.dxsummit.fi/api/v1/spots?limit=500")
 
-FT8_KHZ = [1840, 3573, 7074, 10136, 14074, 18100, 21074, 24915, 28074, 50313, 50323]
+# dxscape_watch.py と同じ（ダイヤル周波数から +0〜+3 kHz を FT8 とみなす）
+FT8_DIALS = [1840, 1908, 3531, 3573, 7041, 7074, 10136, 14074,
+             18100, 21074, 24915, 28074, 50313, 50323]
 BANDS = [
     (1800, 2000, "160m"), (3500, 4000, "80m"), (7000, 7300, "40m"), (10100, 10150, "30m"),
     (14000, 14350, "20m"), (18068, 18168, "17m"), (21000, 21450, "15m"),
@@ -52,11 +57,11 @@ def band_of(khz: float) -> str | None:
 
 def is_ft8(khz: float, comment: str) -> bool:
     c = (comment or "").upper()
-    if "FT8" in c:
-        return True
-    if re.search(r"\b(CW|SSB|USB|LSB|FT4|RTTY|PSK\d*)\b", c):
+    if "FT4" in c:
         return False
-    return any(abs(khz - f) <= 3.0 for f in FT8_KHZ)
+    if "FT8" in c:  # Fox/Hound など標準外の周波数もコメントで拾う
+        return True
+    return any(0 <= khz - d <= 3.0 for d in FT8_DIALS)
 
 
 # ---------------------------------------------------------------- 取得
@@ -150,7 +155,7 @@ def fetch_dxscape() -> list[dict]:
     return spots
 
 
-SOURCES = (("DXSCAPE", fetch_dxscape), ("DX Summit", fetch_dxsummit))  # 同時刻ならDXSCAPEを優先
+SOURCES = (("DXSCAPE", fetch_dxscape), ("DXSummit", fetch_dxsummit))  # 同時刻ならDXSCAPEを優先
 
 
 # ---------------------------------------------------------------- 判定
@@ -161,7 +166,7 @@ def load_worked(args) -> set[str]:
         text = os.environ.get("WORKED_ENTITIES", "")
     worked = {w.strip() for w in text.splitlines() if w.strip()}
     pretend = args.pretend_unworked or os.environ.get("PRETEND_UNWORKED", "")
-    for p in re.split(r"[\s,]+", pretend):
+    for p in pretend.split(","):  # エンティティ名には空白が入るので、区切りはカンマだけ
         worked.discard(p.strip())
     if len(worked) < 10:
         # 一覧が空だと全スポットが「全バンドNEW」になり、通知が大量に出てしまう
@@ -185,7 +190,8 @@ def run_once(args, cty: ctydat.CtyDat, worked: set[str], state: dict) -> None:
             s["source"] = name
         spots += got
 
-    counts = {"取得": len(spots), "JA局FT8": 0, "未交信": 0, "通知": 0}
+    # 交信済みの件数は公開ログに出しても未交信のエンティティは分からないので出す（一覧のずれに気付くため）
+    counts = {"交信済み": len(worked), "取得": len(spots), "JA局FT8": 0, "未交信": 0, "通知": 0}
     notices, log_rows = [], []
     for s in sorted(spots, key=lambda s: s["time"]):
         if not (now - window <= s["time"] <= now + dt.timedelta(minutes=2)):
@@ -199,7 +205,7 @@ def run_once(args, cty: ctydat.CtyDat, worked: set[str], state: dict) -> None:
         counts["JA局FT8"] += 1
         dx = s["dx"].strip().upper()
         ent = cty.lookup(dx)
-        if not ent or ent.prefix in worked:
+        if not ent or ent.name in worked:
             continue
         counts["未交信"] += 1
 
@@ -212,20 +218,20 @@ def run_once(args, cty: ctydat.CtyDat, worked: set[str], state: dict) -> None:
         last = parse_time(rec["last_notified"])
         if last and now - last < dedup:
             if is_new_item:
-                log_rows.append([now.isoformat(timespec="seconds"), s["source"], dx, ent.prefix,
+                log_rows.append([now.isoformat(timespec="seconds"), s["source"], dx, ent.name,
                                  band, f"{s['khz']:.1f}", s["spotter"], "重複のため省略"])
             continue
         rec["last_notified"] = now.isoformat(timespec="seconds")
         notices.append({**s, "dx": dx, "band": band, "entity": ent, "history": list(rec["history"])})
-        log_rows.append([now.isoformat(timespec="seconds"), s["source"], dx, ent.prefix,
+        log_rows.append([now.isoformat(timespec="seconds"), s["source"], dx, ent.name,
                          band, f"{s['khz']:.1f}", s["spotter"], "通知"])
     counts["通知"] = len(notices)
 
-    # 24時間より古い記録は消す
+    # 48時間より古い記録は消す
     for key in list(state):
         last = parse_time(state[key].get("last_notified")) or parse_time(
             (state[key].get("history") or [[None, None]])[-1][1])
-        if not last or now - last > dt.timedelta(hours=24):
+        if not last or now - last > dt.timedelta(hours=48):
             del state[key]
 
     print(" ".join(f"{k}={v}" for k, v in counts.items()))
@@ -253,10 +259,10 @@ def main() -> None:
     ap.add_argument("--log", default="state/log.csv", help="通知ログ（CSV）")
     ap.add_argument("--cty", default="state/cty.dat", help="cty.datの保存先")
     ap.add_argument("--worked-file", help="交信済みエンティティ一覧（省略時は環境変数 WORKED_ENTITIES）")
-    ap.add_argument("--pretend-unworked", default="", help="試験用：未交信扱いにする主プレフィックス（例: 3B8,VP8/h）")
+    ap.add_argument("--pretend-unworked", default="", help="試験用：未交信扱いにするエンティティ名（カンマ区切り。例: China,Asiatic Russia）")
     ap.add_argument("--spotter-entities", nargs="+", default=["JA"], help="対象とするスポッターのエンティティ")
-    ap.add_argument("--window-min", type=int, default=15)
-    ap.add_argument("--dedup-min", type=int, default=30)
+    ap.add_argument("--window-min", type=int, default=60)
+    ap.add_argument("--dedup-min", type=int, default=360)
     ap.add_argument("--loop", type=int, default=0, help="PC用：この秒数ごとに繰り返す（0なら1回）")
     ap.add_argument("--quiet-log", action="store_true", help="公開ログ用：件数だけ出す")
     ap.add_argument("--dry-run", action="store_true", help="送信せず .eml を保存する")
