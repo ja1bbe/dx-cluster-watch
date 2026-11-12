@@ -23,7 +23,8 @@ UTC = dt.timezone.utc
 JST = dt.timezone(dt.timedelta(hours=9))
 
 KP_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
-SW_URL = "https://services.swpc.noaa.gov/products/solar-wind/plasma-1-day.json"
+# dxcc_notify.py と同じ取得先（リアルタイム太陽風、1分値）
+SW_URL = "https://services.swpc.noaa.gov/json/rtsw/rtsw_wind_1m.json"
 
 # 自局受信は青系、クラスターは赤・橙系
 LABEL_COLORS = {
@@ -77,6 +78,22 @@ def _series(url: str, field: str) -> list[tuple[dt.datetime, float]]:
     return out
 
 
+def _rtsw_series(url: str, field: str) -> list[tuple[dt.datetime, float]]:
+    """RTSW（オブジェクトの配列。新しい順のことがあり、複数の衛星の値が混ざる）を読む。
+    active の項目があれば、現在使われている衛星（active=true）の値だけを使い、時刻順に並べる。"""
+    data = _get_json(url)
+    rows = [{str(k).lower(): v for k, v in r.items()} for r in data if isinstance(r, dict)]
+    if any("active" in r for r in rows):
+        rows = [r for r in rows if r.get("active") in (True, "true", 1)]
+    out: dict[dt.datetime, float] = {}
+    for r in rows:
+        try:
+            out[_t(r.get("time_tag"))] = float(r.get(field))
+        except (TypeError, ValueError):
+            pass
+    return sorted(out.items())
+
+
 def fetch_space_weather() -> dict:
     sw: dict = {"kp": [], "speed": [], "error": ""}
     try:
@@ -84,7 +101,7 @@ def fetch_space_weather() -> dict:
     except Exception as e:  # noqa: BLE001
         sw["error"] += f"Kp取得失敗: {e} "
     try:
-        sw["speed"] = _series(SW_URL, "speed")
+        sw["speed"] = _rtsw_series(SW_URL, "proton_speed")
     except Exception as e:  # noqa: BLE001
         sw["error"] += f"太陽風取得失敗: {e}"
     return sw
